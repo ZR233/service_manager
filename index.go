@@ -6,9 +6,8 @@ package service_manager
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/samuel/go-zookeeper/zk"
-	"net"
 	"os"
 	"strings"
 	"time"
@@ -16,23 +15,36 @@ import (
 
 const prefix = "/service"
 
-type Service struct {
-	path  string
-	conn  *zk.Conn
-	hosts []string
+var (
+	ErrNoService      = errors.New("no service")
+	ErrNoServiceAlive = errors.New("no service alive")
+)
+
+type Data struct {
+	Pid      int
+	Host     string
+	HostName string
 }
 
-func NewService(path string, hosts []string) *Service {
+type Service struct {
+	host     string
+	path     string
+	conn     *zk.Conn
+	zkHosts  []string
+	pathReal string
+}
+
+func NewService(path, host string, zkHosts []string) *Service {
 	s := &Service{}
 	path = strings.Trim(path, "/")
 	s.path = strings.Join([]string{prefix, path}, "/")
-	s.hosts = hosts
-
+	s.zkHosts = zkHosts
+	s.host = host
 	return s
 }
 
 func (s *Service) Open() (err error) {
-	conn, _, err := zk.Connect(s.hosts, time.Second*5)
+	conn, _, err := zk.Connect(s.zkHosts, time.Second*5)
 	if err != nil {
 		return
 	}
@@ -46,7 +58,6 @@ func (s *Service) Open() (err error) {
 		exist := false
 		exist, _, err = s.conn.Exists(path)
 		if err != nil {
-			fmt.Println(err)
 			return
 		}
 		if !exist {
@@ -54,39 +65,29 @@ func (s *Service) Open() (err error) {
 			var acls = zk.WorldACL(zk.PermAll)
 			// create
 			var flags int32 = 0
-			p := ""
-			p, err = conn.Create(path, []byte(""), flags, acls)
+
+			_, err = conn.Create(path, []byte(""), flags, acls)
 			if err != nil {
 				return
 			}
-			fmt.Println("created:", p)
 		}
-
 	}
 
-	type Data struct {
-		Pid      int
-		IP       []string
-		HostName string
-	}
-	addrs, err := net.InterfaceAddrs()
 	host, err := os.Hostname()
 
 	dataStruct := Data{Pid: os.Getpid()}
-	for _, v := range addrs {
-		dataStruct.IP = append(dataStruct.IP, v.String())
-	}
+	dataStruct.Host = s.host
+
 	dataStruct.HostName = host
 	data, err := json.Marshal(dataStruct)
 	if err != nil {
 		return
 	}
-	p := ""
-	p, err = conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
+
+	s.pathReal, err = conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
 	if err != nil {
 		return
 	}
-	fmt.Println("created:", p)
 	return
 }
 
