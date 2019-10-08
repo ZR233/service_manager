@@ -16,8 +16,10 @@ import (
 const prefix = "/service"
 
 var (
-	ErrNoService      = errors.New("no service")
-	ErrNoServiceAlive = errors.New("no service alive")
+	ErrNoService          = errors.New("no service")
+	ErrNoServiceAlive     = errors.New("no service alive")
+	ErrConnectToZooKeeper = zk.ErrNoServer
+	ErrInvalidPath        = zk.ErrInvalidPath
 )
 
 type Data struct {

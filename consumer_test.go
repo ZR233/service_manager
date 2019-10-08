@@ -6,14 +6,16 @@ package service_manager
 
 import (
 	"testing"
+	"time"
 )
 
 func TestConsumer_Open(t *testing.T) {
-	c := NewConsumer("wifidig/log_manager", []string{"192.168.0.3:2181"})
-	c.Open()
+	c := NewConsumer("tickdig/log_manager", []string{"192.168.0.3:2181"})
+	c.Run()
 	host, err := c.GetServiceHost()
 	if err != nil {
 		t.Error(err)
 	}
 	t.Log(host)
+	time.Sleep(time.Minute * 5)
 }
