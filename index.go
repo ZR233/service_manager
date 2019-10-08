@@ -41,7 +41,7 @@ func (s *Service) Open() (err error) {
 	pathSlice := strings.Split(path, "/")
 	path = ""
 	pathLayLen := len(pathSlice)
-	for i := 0; i < pathLayLen-1; i++ {
+	for i := 0; i < pathLayLen; i++ {
 		path += "/" + pathSlice[i]
 		exist := false
 		exist, _, err = s.conn.Exists(path)
