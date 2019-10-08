@@ -17,10 +17,9 @@ import (
 const prefix = "/service"
 
 type Service struct {
-	path     string
-	conn     *zk.Conn
-	hosts    []string
-	pathReal string
+	path  string
+	conn  *zk.Conn
+	hosts []string
 }
 
 func NewService(path string, hosts []string) *Service {
@@ -42,7 +41,7 @@ func (s *Service) Open() (err error) {
 	pathSlice := strings.Split(path, "/")
 	path = ""
 	pathLayLen := len(pathSlice)
-	for i := 0; i < pathLayLen; i++ {
+	for i := 0; i < pathLayLen-1; i++ {
 		path += "/" + pathSlice[i]
 		exist := false
 		exist, _, err = s.conn.Exists(path)
@@ -82,11 +81,12 @@ func (s *Service) Open() (err error) {
 	if err != nil {
 		return
 	}
-	s.pathReal, err = conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
+	p := ""
+	p, err = conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
 	if err != nil {
 		return
 	}
-
+	fmt.Println("created:", p)
 	return
 }
 
