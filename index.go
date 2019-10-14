@@ -34,6 +34,11 @@ type Service struct {
 	conn     *zk.Conn
 	zkHosts  []string
 	pathReal string
+	logger   Logger
+}
+
+func (s *Service) SetLogger(logger Logger) {
+	s.logger = logger
 }
 
 func NewService(path, host string, zkHosts []string) *Service {
@@ -42,15 +47,39 @@ func NewService(path, host string, zkHosts []string) *Service {
 	s.path = strings.Join([]string{prefix, path}, "/")
 	s.zkHosts = zkHosts
 	s.host = host
+	s.SetLogger(defaultLogger{})
+
 	return s
 }
 
 func (s *Service) Open() (err error) {
-	conn, _, err := zk.Connect(s.zkHosts, time.Second*5)
+	conn, event, err := zk.Connect(s.zkHosts, time.Second*5,
+		zk.WithLogger(zkLogger{s.logger}))
 	if err != nil {
 		return
 	}
 	s.conn = conn
+
+	go func() {
+		for {
+			e := <-event
+			if e.Type == zk.EventSession && e.State == zk.StateExpired {
+				s.logger.Warn("zk reconnect")
+				conn.Close()
+				for {
+					err = s.Open()
+					if err != nil {
+						time.Sleep(time.Second)
+						s.logger.Warn(err.Error())
+					} else {
+						break
+					}
+				}
+				break
+			}
+		}
+	}()
+
 	path := strings.TrimLeft(s.path, "/")
 	pathSlice := strings.Split(path, "/")
 	path = ""
@@ -94,6 +123,9 @@ func (s *Service) Open() (err error) {
 }
 
 func (s Service) Close() {
+	defer func() {
+		recover()
+	}()
 	s.conn.Close()
 	return
 }
