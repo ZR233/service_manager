@@ -52,33 +52,21 @@ func NewService(path, host string, zkHosts []string) *Service {
 	return s
 }
 
-func (s *Service) Open() (err error) {
-	conn, event, err := zk.Connect(s.zkHosts, time.Second*5,
-		zk.WithLogger(zkLogger{s.logger}))
-	if err != nil {
-		return
-	}
-	s.conn = conn
-
-	go func() {
-		for {
-			e := <-event
-			if e.Type == zk.EventSession && e.State == zk.StateExpired {
-				s.logger.Warn("zk reconnect")
-				conn.Close()
-				for {
-					err = s.Open()
-					if err != nil {
-						time.Sleep(time.Second)
-						s.logger.Warn(err.Error())
-					} else {
-						break
-					}
-				}
-				break
-			}
+func (s *Service) tryToConnect() (event <-chan zk.Event) {
+	for {
+		var err error
+		event, err = s.connect()
+		if err != nil {
+			time.Sleep(time.Second)
+			s.logger.Warn(err.Error())
+		} else {
+			return
 		}
-	}()
+	}
+}
+
+func (s *Service) Open() (err error) {
+	event := s.tryToConnect()
 
 	path := strings.TrimLeft(s.path, "/")
 	pathSlice := strings.Split(path, "/")
@@ -97,7 +85,7 @@ func (s *Service) Open() (err error) {
 			// create
 			var flags int32 = 0
 
-			_, err = conn.Create(path, []byte(""), flags, acls)
+			_, err = s.conn.Create(path, []byte(""), flags, acls)
 			if err != nil {
 				return
 			}
@@ -115,7 +103,30 @@ func (s *Service) Open() (err error) {
 		return
 	}
 
-	s.pathReal, err = conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
+	s.pathReal, err = s.conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
+	if err != nil {
+		return
+	}
+
+	// 短线重连
+	go func(event <-chan zk.Event) {
+		for {
+			e := <-event
+			if e.Type == zk.EventSession && e.State == zk.StateExpired {
+				s.logger.Warn("zk reconnect")
+				s.conn.Close()
+				event = s.tryToConnect()
+			}
+		}
+
+	}(event)
+
+	return
+}
+
+func (s *Service) connect() (event <-chan zk.Event, err error) {
+	s.conn, event, err = zk.Connect(s.zkHosts, time.Second*5,
+		zk.WithLogger(zkLogger{s.logger}))
 	if err != nil {
 		return
 	}
