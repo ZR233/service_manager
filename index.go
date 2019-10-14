@@ -108,7 +108,7 @@ func (s *Service) Open() (err error) {
 		return
 	}
 
-	// 短线重连
+	// 断线重连
 	go func(event <-chan zk.Event) {
 		for {
 			e := <-event
