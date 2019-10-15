@@ -92,21 +92,7 @@ func (s *Service) Open() (err error) {
 		}
 	}
 
-	host, err := os.Hostname()
-
-	dataStruct := Data{Pid: os.Getpid()}
-	dataStruct.Host = s.host
-
-	dataStruct.HostName = host
-	data, err := json.Marshal(dataStruct)
-	if err != nil {
-		return
-	}
-
-	s.pathReal, err = s.conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
-	if err != nil {
-		return
-	}
+	s.register()
 
 	// 断线重连
 	go func(event <-chan zk.Event) {
@@ -115,7 +101,9 @@ func (s *Service) Open() (err error) {
 			if e.Type == zk.EventSession && e.State == zk.StateExpired {
 				s.logger.Warn("zk reconnect")
 				s.conn.Close()
+				time.Sleep(time.Millisecond * 100)
 				event = s.tryToConnect()
+				s.register()
 			}
 		}
 
@@ -131,6 +119,24 @@ func (s *Service) connect() (event <-chan zk.Event, err error) {
 		return
 	}
 	return
+}
+
+func (s *Service) register() {
+	host, err := os.Hostname()
+
+	dataStruct := Data{Pid: os.Getpid()}
+	dataStruct.Host = s.host
+
+	dataStruct.HostName = host
+	data, err := json.Marshal(dataStruct)
+	if err != nil {
+		return
+	}
+
+	s.pathReal, err = s.conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
+	if err != nil {
+		return
+	}
 }
 
 func (s Service) Close() {
