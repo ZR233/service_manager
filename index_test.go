@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewService(t *testing.T) {
-	s := NewService("/test", "127.0.0.1", []string{"192.168.0.3:2181"})
+	s := NewService("/cam_detect", "127.0.0.1", []string{"192.168.0.3:2181"})
 	err := s.Open()
 	if err != nil {
 		t.Error(err)

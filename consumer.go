@@ -93,6 +93,7 @@ func (c *Consumer) GetServiceHost() (host string, err error) {
 	serviceCount := len(c.aliveHosts)
 	if serviceCount == 0 {
 		err = ErrNoServiceAlive
+		return
 	}
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	host = c.aliveHosts[r.Intn(serviceCount)]

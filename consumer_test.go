@@ -10,7 +10,7 @@ import (
 )
 
 func TestConsumer_Open(t *testing.T) {
-	c := NewConsumer("tickdig/log_manager", []string{"192.168.0.3:2181"})
+	c := NewConsumer("mac_info", []string{"192.168.0.3:2181"})
 	c.Run()
 	host, err := c.GetServiceHost()
 	if err != nil {
