@@ -5,6 +5,7 @@
 
 ```go
 import "github.com/ZR233/service_manager"
+
 //zookeeper集群地址
 zkHosts = ["192.168.0.2:2181", "192.168.0.3:2181"]
 //服务名称
@@ -30,7 +31,8 @@ defer service.Close()
 import "github.com/ZR233/service_manager"
 
 zkHosts = ["192.168.0.2:2181", "192.168.0.3:2181"]
-consumer = service_manager.NewConsumer("cam_detect", zkHosts)
+serviceName = "test_project/auth"
+consumer = service_manager.NewConsumer(serviceName, zkHosts)
 //Run()函数不会阻塞
 consumer.Run()
 
