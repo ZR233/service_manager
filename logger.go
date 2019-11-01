@@ -10,36 +10,35 @@ import (
 )
 
 type Logger interface {
-	Debug(msg string)
-	Info(msg string)
-	Warn(msg string)
-	Panic(msg string)
+	Debug(args ...interface{})
+	Info(args ...interface{})
+	Warn(args ...interface{})
+	Panic(args ...interface{})
 }
 
 type defaultLogger struct {
 }
 
-func (d defaultLogger) Debug(msg string) {
-	log.Println(msg)
+func (d defaultLogger) Debug(args ...interface{}) {
+	log.Println(args...)
 }
 
-func (d defaultLogger) Info(msg string) {
-	log.Println(msg)
+func (d defaultLogger) Info(args ...interface{}) {
+	log.Println(args...)
 }
 
-func (d defaultLogger) Warn(msg string) {
-	log.Println(msg)
+func (d defaultLogger) Warn(args ...interface{}) {
+	log.Println(args...)
 }
 
-func (d defaultLogger) Panic(msg string) {
-	log.Panic(msg)
+func (d defaultLogger) Panic(args ...interface{}) {
+	log.Panic(args...)
 }
 
 type zkLogger struct {
 	logger Logger
 }
 
-func (z zkLogger) Printf(msg string, msg2 ...interface{}) {
-	msg = fmt.Sprintln(msg, msg2)
-	z.logger.Info(msg)
+func (z zkLogger) Printf(format string, msg ...interface{}) {
+	z.logger.Info(fmt.Sprintf(format, msg...))
 }
