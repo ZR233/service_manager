@@ -37,6 +37,7 @@ type Service struct {
 	pathReal string
 	logger   Logger
 	stopFlag bool
+	funcChan chan func()
 }
 
 func (s *Service) SetLogger(logger Logger) {
@@ -50,17 +51,44 @@ func NewService(path, host string, zkHosts []string) *Service {
 	s.zkHosts = zkHosts
 	s.host = host
 	s.SetLogger(defaultLogger{})
-
+	s.funcChan = make(chan func(), 5)
+	go func() {
+		for {
+			if f, ok := <-s.funcChan; ok {
+				f()
+			} else {
+				return
+			}
+		}
+	}()
 	return s
 }
 
 func (s *Service) connect() (event <-chan zk.Event, err error) {
+	option := zk.WithEventCallback(s.eventCallback)
 	s.conn, event, err = zk.Connect(s.zkHosts, time.Second*5,
-		zk.WithLogger(zkLogger{s.logger}))
+		zk.WithLogger(zkLogger{s.logger}),
+		option)
 	if err != nil {
 		return
 	}
 	return
+}
+
+func (s *Service) eventCallback(event zk.Event) {
+	if event.Type == zk.EventSession && event.State == zk.StateHasSession {
+		s.logger.Info("register service")
+		defer func() {
+			recover()
+		}()
+		s.funcChan <- func() {
+			err := s.register()
+			if err != nil {
+				s.logger.Warn(err.Error())
+				return
+			}
+		}
+	}
 }
 
 func (s *Service) register() (err error) {
@@ -102,6 +130,7 @@ func (s *Service) Close() {
 		recover()
 	}()
 	s.stopFlag = true
+	close(s.funcChan)
 	s.conn.Close()
 	return
 }
@@ -149,15 +178,6 @@ func (s *Service) Open() (err error) {
 			}
 		}
 	}
-
-	go func() {
-		for {
-			if s.stopFlag {
-				return
-			}
-			s.registerLoop()
-		}
-	}()
 
 	return
 }
