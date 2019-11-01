@@ -7,6 +7,7 @@ package service_manager
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/samuel/go-zookeeper/zk"
 	"os"
 	"strings"
@@ -35,6 +36,7 @@ type Service struct {
 	zkHosts  []string
 	pathReal string
 	logger   Logger
+	stopFlag bool
 }
 
 func (s *Service) SetLogger(logger Logger) {
@@ -52,22 +54,78 @@ func NewService(path, host string, zkHosts []string) *Service {
 	return s
 }
 
-func (s *Service) tryToConnect() (event <-chan zk.Event) {
-	for {
-		var err error
-		event, err = s.connect()
-		if err != nil {
-			time.Sleep(time.Second)
-			s.logger.Warn(err.Error())
-		} else {
-			return
+func (s *Service) connect() (event <-chan zk.Event, err error) {
+	s.conn, event, err = zk.Connect(s.zkHosts, time.Second*5,
+		zk.WithLogger(zkLogger{s.logger}))
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (s *Service) register() (err error) {
+	hostName, err := os.Hostname()
+	host := hostName
+
+	hostArr := strings.Split(s.host, ":")
+	if hostArr[0] != "" {
+		host = s.host
+	}
+	if len(hostArr) > 1 {
+		host = host + ":" + hostArr[1]
+	}
+
+	dataStruct := Data{Pid: os.Getpid()}
+	dataStruct.Host = host
+	dataStruct.HostName = hostName
+	data, err := json.Marshal(dataStruct)
+	if err != nil {
+		return
+	}
+	pathName := s.path + "/" + host
+	ok := false
+	if ok, _, err = s.conn.Exists(pathName); err != nil {
+		return
+	} else {
+		if !ok {
+			s.pathReal, err = s.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+			if err != nil {
+				return
+			}
 		}
 	}
+	return
+}
+
+func (s *Service) Close() {
+	defer func() {
+		recover()
+	}()
+	s.stopFlag = true
+	s.conn.Close()
+	return
+}
+func (s *Service) registerLoop() {
+	defer func() {
+		if e := recover(); e != nil {
+			s.logger.Warn(fmt.Sprintf("%s", e))
+		}
+	}()
+
+	if s.conn.State() == zk.StateHasSession {
+		err := s.register()
+		if err != nil {
+			s.logger.Warn(err.Error())
+		}
+	}
+	time.Sleep(time.Second)
 }
 
 func (s *Service) Open() (err error) {
-	event := s.tryToConnect()
-
+	_, err = s.connect()
+	if err != nil {
+		return
+	}
 	path := strings.TrimLeft(s.path, "/")
 	pathSlice := strings.Split(path, "/")
 	path = ""
@@ -92,57 +150,14 @@ func (s *Service) Open() (err error) {
 		}
 	}
 
-	s.register()
-
-	// 断线重连
-	go func(event <-chan zk.Event) {
+	go func() {
 		for {
-			e := <-event
-			if e.Type == zk.EventSession && e.State == zk.StateExpired {
-				s.logger.Warn("zk reconnect")
-				s.conn.Close()
-				time.Sleep(time.Millisecond * 100)
-				event = s.tryToConnect()
-				s.register()
+			if s.stopFlag {
+				return
 			}
+			s.registerLoop()
 		}
-
-	}(event)
-
-	return
-}
-
-func (s *Service) connect() (event <-chan zk.Event, err error) {
-	s.conn, event, err = zk.Connect(s.zkHosts, time.Second*5,
-		zk.WithLogger(zkLogger{s.logger}))
-	if err != nil {
-		return
-	}
-	return
-}
-
-func (s *Service) register() {
-	host, err := os.Hostname()
-
-	dataStruct := Data{Pid: os.Getpid()}
-	dataStruct.Host = s.host
-
-	dataStruct.HostName = host
-	data, err := json.Marshal(dataStruct)
-	if err != nil {
-		return
-	}
-
-	s.pathReal, err = s.conn.CreateProtectedEphemeralSequential(s.path+"/node", data, zk.WorldACL(zk.PermAll))
-	if err != nil {
-		return
-	}
-}
-
-func (s Service) Close() {
-	defer func() {
-		recover()
 	}()
-	s.conn.Close()
+
 	return
 }
