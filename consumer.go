@@ -76,7 +76,7 @@ func (c *Consumer) updateServerList() (err error) {
 		var dataBytes []byte
 		dataBytes, _, err = c.conn.Get(c.path + "/" + v)
 
-		data := &Data{}
+		data := &NodeInfo{}
 		err = json.Unmarshal(dataBytes, data)
 		if err != nil {
 			return
