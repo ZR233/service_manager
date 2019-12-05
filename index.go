@@ -5,6 +5,7 @@
 package service_manager
 
 import (
+	"context"
 	"fmt"
 
 	"os"
@@ -61,6 +62,6 @@ func NewService(servicePath string, port int, zkHosts []string, options ...Optio
 
 	service.SetLogger(defaultLogger{})
 	service.funcChan = make(chan func() error, 5)
-
+	service.ctx, service.cancel = context.WithCancel(context.Background())
 	return
 }

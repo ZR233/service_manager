@@ -1,6 +1,7 @@
 package service_manager
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,16 +20,29 @@ type NodeInfo struct {
 	Port     int
 }
 
+type ServiceStatus int
+
+const (
+	ServiceStatusInit ServiceStatus = iota
+	ServiceStatusOpen
+	ServiceStatusRegistered
+	ServiceStatusStopping
+	ServiceStatusStopped
+)
+
 type Service struct {
+	sync.Mutex
 	path     string
 	conn     *zk.Conn
 	zkHosts  []string
 	pathReal string
 	logger   Logger
-	stopFlag bool
 	funcChan chan func() error
 	ServiceInfo
 	NodeInfo
+	status ServiceStatus
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func (s *Service) SetLogger(logger Logger) {
@@ -62,6 +77,8 @@ func (s *Service) eventCallback(event zk.Event) {
 }
 
 func (s *Service) register() (err error) {
+	s.Lock()
+	defer s.Unlock()
 
 	s.Pid = os.Getpid()
 
@@ -72,7 +89,6 @@ func (s *Service) register() (err error) {
 	}
 
 	host := ""
-
 	if s.Type == ServiceTypeSingleton {
 		host = "single"
 	} else {
@@ -100,6 +116,7 @@ func (s *Service) register() (err error) {
 		}
 		return
 	}
+	s.status = ServiceStatusRegistered
 
 	//ok := false
 	//if ok, _, err = s.conn.Exists(pathName); err != nil {
@@ -125,17 +142,19 @@ func (s *Service) register() (err error) {
 	//		}
 	//	}
 	//}
+	s.logger.Debug("register success: ", pathName)
 	return
 }
 
-func (s *Service) Close() {
+func (s *Service) Close() error {
 	defer func() {
 		recover()
 	}()
-	s.stopFlag = true
+	s.cancel()
+	s.status = ServiceStatusStopping
 	close(s.funcChan)
 	s.conn.Close()
-	return
+	return nil
 }
 func (s *Service) registerLoop() {
 	defer func() {
@@ -154,16 +173,34 @@ func (s *Service) registerLoop() {
 }
 
 func (s *Service) Open() (err error) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.status = ServiceStatusOpen
 	go func() {
+		defer func() {
+			s.status = ServiceStatusStopped
+			s.logger.Debug("service stop")
+		}()
+
 		for {
-			if f, ok := <-s.funcChan; ok {
+			if s.status >= ServiceStatusStopping {
+				return
+			}
+			select {
+			case <-s.ctx.Done():
+				return
+			case f := <-s.funcChan:
+				if f == nil {
+					continue
+				}
+
 				err := f()
 				e := &NodeRunningError{}
 				if errors.As(err, &e) {
 					panic(err)
 				}
-			} else {
-				return
+
 			}
 		}
 	}()
@@ -211,4 +248,8 @@ func (s *Service) ensureServicePathExist() (err error) {
 	}
 	_, err = s.conn.Set(s.path, data, state.Version)
 	return
+}
+
+func (s *Service) Status() ServiceStatus {
+	return s.status
 }

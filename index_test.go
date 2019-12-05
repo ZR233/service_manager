@@ -36,10 +36,10 @@ func TestNewService2(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	//go func() {
-	//	time.Sleep(time.Second*5)
-	//	s.Close()
-	//}()
+	go func() {
+		time.Sleep(time.Second * 5)
+		s.Close()
+	}()
 	defer s.Close()
 	time.Sleep(time.Minute * 10)
 }
