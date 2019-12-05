@@ -10,12 +10,15 @@ import (
 )
 
 func TestConsumer_Open(t *testing.T) {
-	c := NewConsumer("mac_info", []string{"192.168.0.3:2181"})
-	c.Run()
-	host, err := c.GetServiceHost()
+
+	m := NewManager([]string{"192.168.0.3:2181"})
+	_ = m.NewConsumer(m.NewService("test"))
+
+	err := m.RunSync()
 	if err != nil {
 		t.Error(err)
+		return
 	}
-	t.Log(host)
-	time.Sleep(time.Minute * 5)
+	time.Sleep(time.Second * 150)
+
 }
