@@ -161,37 +161,13 @@ func (p *Producer) register() (err error) {
 		// 非自身，退出
 		err = &NodeRunningError{
 			RunningHost: host,
-			Err:         err,
+			Err:         zk.ErrNodeExists,
 		}
 		return
 	}
 
 	p.status = StatusRegistered
 
-	//ok := false
-	//if ok, _, err = p.conn.Exists(pathName); err != nil {
-	//	err = &ZKError{
-	//		Msg: "check exists: " +pathName + "\n",
-	//		Err: err,
-	//	}
-	//	return
-	//} else {
-	//	if ok{
-	//		if p.Type == ServiceTypeSingleton{
-	//			err = fmt.Errorf("%w\nrunning host:[%p]", ErrSingletonServiceIsRunning, )
-	//			return
-	//		}
-	//	}else{
-	//		p.pathReal, err = p.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
-	//		if err != nil {
-	//			err = &ZKError{
-	//				Msg: "Create: " +pathName + "\n",
-	//				Err: err,
-	//			}
-	//			return
-	//		}
-	//	}
-	//}
 	p.debug("register success: ", pathName)
 	return
 }
