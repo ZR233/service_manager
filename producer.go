@@ -102,11 +102,21 @@ func (p *Producer) register() (err error) {
 	}
 	pathName := path.Join(p.service.Path, host)
 
+	nodeData, err := json.Marshal(p.NodeInfo)
+	if err != nil {
+		err = fmt.Errorf("node info to json\n%w", err)
+		err = &NodeRunningError{
+			RunningHost: host,
+			Err:         err,
+		}
+		return
+	}
+
 	data, _, err := p.manager.conn.Get(pathName)
 	if err != nil {
 		// 临时节点不存在，创建
 		if err == zk.ErrNoNode {
-			p.pathReal, err = p.manager.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+			p.pathReal, err = p.manager.conn.Create(pathName, nodeData, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
 			if err != nil {
 				if errors.Is(err, zk.ErrNodeExists) {
 					err = &NodeRunningError{
@@ -136,16 +146,8 @@ func (p *Producer) register() (err error) {
 			err = fmt.Errorf("delete fail\n%s\n%w", pathName, err)
 			return
 		}
-		data, err = json.Marshal(p.NodeInfo)
-		if err != nil {
-			err = fmt.Errorf("node info to json\n%w", err)
-			err = &NodeRunningError{
-				RunningHost: host,
-				Err:         err,
-			}
-			return
-		}
-		p.pathReal, err = p.manager.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+
+		p.pathReal, err = p.manager.conn.Create(pathName, nodeData, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
 		if err != nil {
 			if errors.Is(err, zk.ErrNodeExists) {
 				err = &NodeRunningError{
