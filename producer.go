@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"github.com/samuel/go-zookeeper/zk"
 	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +32,7 @@ type NodeInfo struct {
 	Host     string
 	HostName string
 	Port     int
+	ExecPath string
 }
 
 type Producer struct {
@@ -179,12 +183,29 @@ func (p *Producer) registerLoop() {
 	}
 	time.Sleep(time.Second)
 }
+func GetCurrentPath() (string, error) {
+	file, err := exec.LookPath(os.Args[0])
+	if err != nil {
+		return "", err
+	}
+	path, err := filepath.Abs(file)
+	if err != nil {
+		return "", err
+	}
+	//fmt.Println("path111:", path)
+	if runtime.GOOS == "windows" {
+		path = strings.Replace(path, "\\", "/", -1)
+	}
+	return path, nil
+}
 
 func (p *Producer) Open() (err error) {
 	go func() {
 		<-p.ctx.Done()
 		p.release()
 	}()
+
+	p.ExecPath, _ = GetCurrentPath()
 
 	p.status = StatusOpen
 	go func() {
