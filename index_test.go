@@ -22,6 +22,7 @@ func TestNewService(t *testing.T) {
 		t.Error(err)
 		return
 	}
+	t.Log("")
 	//go func() {
 	//	time.Sleep(time.Second*5)
 	//	s.Close()

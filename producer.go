@@ -33,6 +33,7 @@ type NodeInfo struct {
 	HostName string
 	Port     int
 	ExecPath string
+	version  int32
 }
 
 type Producer struct {
@@ -89,14 +90,9 @@ func (p *Producer) register() (err error) {
 	if p.status >= StatusStopping {
 		return
 	}
+	p.status = StatusOpenSuccess
 
 	p.Pid = os.Getpid()
-
-	data, err := json.Marshal(p.NodeInfo)
-	if err != nil {
-		err = fmt.Errorf("node info to json\n%w", err)
-		return
-	}
 
 	host := ""
 	if p.service.Type == ServiceTypeSingleton {
@@ -106,26 +102,68 @@ func (p *Producer) register() (err error) {
 	}
 	pathName := path.Join(p.service.Path, host)
 
-	p.pathReal, err = p.manager.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+	data, _, err := p.manager.conn.Get(pathName)
 	if err != nil {
-		if errors.Is(err, zk.ErrNodeExists) {
-			if p.service.Type == ServiceTypeSingleton {
-				err = ErrSingletonServiceIsRunning
+		// 临时节点不存在，创建
+		if err == zk.ErrNoNode {
+			p.pathReal, err = p.manager.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+			if err != nil {
+				if errors.Is(err, zk.ErrNodeExists) {
+					err = &NodeRunningError{
+						RunningHost: host,
+						Err:         err,
+					}
+				}
 			}
+		}
+		return
+	}
+	// 临时节点已存在，判断是否是自身
+	nodeInfoOld := &NodeInfo{}
+	err = json.Unmarshal(data, nodeInfoOld)
+	if err != nil {
+		err = &NodeRunningError{
+			RunningHost: host,
+			Err:         err,
+		}
+		return
+	}
 
+	// 若为自身， 删除重建
+	if nodeInfoOld.HostName == p.HostName && nodeInfoOld.Pid == p.Pid {
+		err = p.manager.conn.Delete(pathName, -1)
+		if err != nil {
+			err = fmt.Errorf("delete fail\n%s\n%w", pathName, err)
+			return
+		}
+		data, err = json.Marshal(p.NodeInfo)
+		if err != nil {
+			err = fmt.Errorf("node info to json\n%w", err)
 			err = &NodeRunningError{
 				RunningHost: host,
 				Err:         err,
 			}
 			return
 		}
+		p.pathReal, err = p.manager.conn.Create(pathName, data, zk.FlagEphemeral, zk.WorldACL(zk.PermAll))
+		if err != nil {
+			if errors.Is(err, zk.ErrNodeExists) {
+				err = &NodeRunningError{
+					RunningHost: host,
+					Err:         err,
+				}
+			}
+		}
 
-		err = &ZKError{
-			Msg: "Create: " + pathName + "\n",
-			Err: err,
+	} else {
+		// 非自身，退出
+		err = &NodeRunningError{
+			RunningHost: host,
+			Err:         err,
 		}
 		return
 	}
+
 	p.status = StatusRegistered
 
 	//ok := false
@@ -188,15 +226,15 @@ func GetCurrentPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path, err := filepath.Abs(file)
+	pathStr, err := filepath.Abs(file)
 	if err != nil {
 		return "", err
 	}
-	//fmt.Println("path111:", path)
+	//fmt.Println("path111:", pathStr)
 	if runtime.GOOS == "windows" {
-		path = strings.Replace(path, "\\", "/", -1)
+		pathStr = strings.Replace(pathStr, "\\", "/", -1)
 	}
-	return path, nil
+	return pathStr, nil
 }
 
 func (p *Producer) Open() (err error) {
@@ -208,39 +246,6 @@ func (p *Producer) Open() (err error) {
 	p.ExecPath, _ = GetCurrentPath()
 
 	p.status = StatusOpen
-	go func() {
-		defer func() {
-			p.status = StatusStopped
-			p.debug("service stop")
-		}()
-
-		for {
-			if p.status >= StatusStopping {
-				return
-			}
-
-			if p.status < StatusOpenSuccess {
-				time.Sleep(time.Millisecond * 20)
-				continue
-			}
-
-			select {
-			case <-p.ctx.Done():
-				return
-			case f := <-p.funcChan:
-				if f == nil {
-					continue
-				}
-
-				err := f()
-				e := &NodeRunningError{}
-				if errors.As(err, &e) {
-					panic(err)
-				}
-
-			}
-		}
-	}()
 
 	p.Lock()
 	defer p.Unlock()
@@ -252,7 +257,37 @@ func (p *Producer) Open() (err error) {
 
 	p.status = StatusOpenSuccess
 	p.debug("service path check ok")
+
+	go p.dealFuncLoop()
 	return
+}
+
+func (p *Producer) dealFuncLoop() {
+	defer func() {
+		p.status = StatusStopped
+		p.debug("service stop")
+	}()
+	for {
+		if p.status >= StatusStopping {
+			return
+		}
+
+		select {
+		case <-p.ctx.Done():
+			return
+		case f := <-p.funcChan:
+			if f == nil {
+				continue
+			}
+
+			err := f()
+			e := &NodeRunningError{}
+			if errors.As(err, &e) {
+				panic(err)
+			}
+
+		}
+	}
 }
 
 func (p *Producer) ensureServicePathExist() (err error) {
