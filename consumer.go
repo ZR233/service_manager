@@ -10,8 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	pool "github.com/ZR233/goutils/conn_pool"
 	"github.com/samuel/go-zookeeper/zk"
-	"net"
+	"io"
 	"sync"
 	"time"
 )
@@ -28,20 +29,30 @@ import (
 //	stateClosed
 //)
 
-type ConnFactory func(host string) (net.Conn, error)
+type ConnFactory func(host string) (io.Closer, error)
 
 type Consumer struct {
 	manager *Manager
 	// host-conn
-	conns  map[string]net.Conn
+	connPools   map[string]*pool.Pool
+	aliveHosts  []string
+	connHostMap map[io.Closer]string
+
+	connMax      int
+	connMin      int
+	connFactory  ConnFactory
+	connTestFunc pool.ConnTestFunc
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	sync.Mutex
-	status          Status
-	service         *Service
-	connFactory     ConnFactory
+	status  Status
+	service *Service
+
 	nodeWatchCancel []context.CancelFunc
 	funcChan        chan func() error
+
+	hostIter int
 }
 
 func (c *Consumer) release() {
@@ -76,37 +87,8 @@ func (c *Consumer) watchService() (err error) {
 		if event_.Type != zk.EventNodeDataChanged {
 			return
 		}
+		err = c.updateService(data, false)
 
-		oldData, err_ := json.Marshal(c.service)
-		if err_ != nil {
-			err = fmt.Errorf("get service info error\n%w", err_)
-			return
-		}
-		if bytes.Equal(oldData, data) {
-			return
-		}
-
-		c.Lock()
-		defer c.Unlock()
-
-		for _, f := range c.nodeWatchCancel {
-			f()
-		}
-
-		c.debug(event_.Type)
-		err = json.Unmarshal(data, c.service)
-		if err != nil {
-			err = fmt.Errorf("get service info error\n%w", err)
-			return
-		}
-		msg := fmt.Sprintf("Service Info Updated\nprotocol:%s\ntype:%s", c.service.Protocol, c.service.Type)
-
-		c.info(msg)
-		//err = c.getNodes()
-		//if err != nil {
-		//	err = fmt.Errorf("get nodes error\n%w", err)
-		//	return
-		//}
 		go c.connUpdateLoop()
 
 	case <-c.ctx.Done():
@@ -115,10 +97,21 @@ func (c *Consumer) watchService() (err error) {
 	return
 }
 
-func (c *Consumer) GetService() (err error) {
-	data, _, err := c.manager.conn.Get(c.service.Path)
-	if err != nil {
+func (c *Consumer) updateService(data []byte, force bool) (err error) {
+	oldData, err_ := json.Marshal(c.service)
+	if err_ != nil {
+		err = fmt.Errorf("get service info error\n%w", err_)
 		return
+	}
+	if bytes.Equal(oldData, data) && force == false {
+		return
+	}
+
+	c.Lock()
+	defer c.Unlock()
+
+	for _, f := range c.nodeWatchCancel {
+		f()
 	}
 
 	err = json.Unmarshal(data, c.service)
@@ -129,63 +122,67 @@ func (c *Consumer) GetService() (err error) {
 	msg := fmt.Sprintf("Service Info Updated\nprotocol:%s\ntype:%s", c.service.Protocol, c.service.Type)
 
 	c.info(msg)
+	if c.connFactory == nil {
+		switch c.service.Protocol {
+		case ProtocolGRPC:
+			c.connFactory = GRpcFactory()
+			c.connTestFunc = GRpcConnTest()
+		}
+	}
 
 	return
 }
 
-func (c *Consumer) getNodes() (err error) {
-	list, _, err := c.manager.conn.Children(c.service.Path)
+func (c *Consumer) getService() (err error) {
+	data, _, err := c.manager.conn.Get(c.service.Path)
 	if err != nil {
 		return
 	}
-
-	c.Lock()
-	defer c.Unlock()
-
-	msg := "----node change----\n"
-	for _, node := range list {
-		msg += node + "\n"
-	}
-	msg += "----node change----\n"
-
-	c.info(msg)
-
+	err = c.updateService(data, true)
 	return
 }
+
 func (c *Consumer) updateNode(nodeChangePre bool) (eventChan <-chan zk.Event, err error) {
 	c.Lock()
 	defer c.Unlock()
-	list, _, eventChan, err := c.manager.conn.ChildrenW(c.service.Path)
+	c.aliveHosts, _, eventChan, err = c.manager.conn.ChildrenW(c.service.Path)
 	if err != nil {
 		return
 	}
+	c.hostIter = 0
 	if nodeChangePre {
 		mapNode := map[string]bool{}
 
 		msg := "----node change----\n"
-		for _, node := range list {
+		for _, node := range c.aliveHosts {
 			msg += node + "\n"
 			mapNode[node] = true
 		}
 		msg += "----node change----\n"
 		c.info(msg)
-		defer func() {
-			recover()
-		}()
+		//defer func() {
+		//	recover()
+		//}()
 
 		// 关闭缺少的
-		for host, conn := range c.conns {
+		for host, connPool := range c.connPools {
 			if _, ok := mapNode[host]; !ok {
-				_ = conn.Close()
+				_ = connPool.Shutdown()
 			}
 		}
 
 		// 创建新增的
 		for host := range mapNode {
-			if _, ok := c.conns[host]; !ok {
-				c.conns[host], err = c.connFactory(host)
+			if _, ok := c.connPools[host]; !ok {
+				c.connPools[host], err = pool.NewPool(
+					c.poolConnFactory(host),
+					c.poolErrorHandler,
+					c.connTestFunc,
+					pool.OptionMaxOpen(c.connMax),
+					pool.OptionMinOpen(c.connMin),
+				)
 				if err != nil {
-					c.warn("create conn error\n", err)
+					c.panic("create conn pool error\n", err)
 				}
 			}
 		}
@@ -194,11 +191,48 @@ func (c *Consumer) updateNode(nodeChangePre bool) (eventChan <-chan zk.Event, er
 	return
 }
 
-func (c *Consumer) GetConn() (conn net.Conn, err error) {
+func (c *Consumer) poolErrorHandler(err error) {
+	if err != nil {
+		c.panic("create conn error\n", err)
+	}
+}
+func (c *Consumer) poolConnFactory(host string) pool.ConnFactory {
+	return func() (closer io.Closer, err error) {
+		closer, err = c.connFactory(host)
+		return
+	}
+}
+
+func (c *Consumer) GetConn() (conn io.Closer, err error) {
 	c.Lock()
 	defer c.Unlock()
+	if len(c.connPools) < 1 {
+		err = ErrNoServiceAlive
+		return
+	}
+
+	if c.hostIter > len(c.aliveHosts)-1 {
+		c.hostIter = 0
+	}
+	host := c.aliveHosts[c.hostIter]
+	conn, err = c.connPools[host].Acquire()
+	c.connHostMap[conn] = host
 
 	return
+}
+func (c *Consumer) ReleaseConn(conn io.Closer) {
+	c.Lock()
+	defer c.Unlock()
+	defer func() {
+		recover()
+	}()
+	host := c.connHostMap[conn]
+
+	if v, ok := c.connPools[host]; ok {
+		v.Release(conn)
+	} else {
+		_ = conn.Close()
+	}
 }
 
 func (c *Consumer) watchNodes(nodeChangePre bool) (nodeChange bool, err error) {
@@ -215,17 +249,25 @@ func (c *Consumer) watchNodes(nodeChangePre bool) (nodeChange bool, err error) {
 	}
 	return
 }
+func (c *Consumer) cleanConnPools() {
+	for _, conn := range c.connPools {
+		_ = conn.Shutdown()
+	}
+	c.connPools = map[string]*pool.Pool{}
+	c.aliveHosts = nil
+}
 
 func (c *Consumer) connUpdateLoop() {
 	defer c.debug("connUpdateLoop stop")
-	c.debug("watch nodes")
-	for _, conn := range c.conns {
-		_ = conn.Close()
-	}
+
+	c.debug("close all connections")
+	c.cleanConnPools()
+
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.nodeWatchCancel = append(c.nodeWatchCancel, cancel)
 	nodeChangePre := true
 	var err error
+	c.debug("watch nodes")
 	for {
 		select {
 		case <-ctx.Done():
@@ -262,18 +304,6 @@ func (c *Consumer) serviceUpdateLoop() {
 
 }
 
-func (c *Consumer) zkOnConnected() (err error) {
-
-	for _, conn := range c.conns {
-		_ = conn.Close()
-	}
-	c.conns = make(map[string]net.Conn)
-	err = c.GetService()
-	c.status = StatusOpenSuccess
-
-	return
-}
-
 func (c *Consumer) funcDealerLoop() {
 	defer c.debug("funcDealerLoop stop")
 
@@ -304,7 +334,7 @@ func (c *Consumer) funcDealerLoop() {
 
 func (c *Consumer) Open() (err error) {
 
-	err = c.GetService()
+	err = c.getService()
 	if err != nil {
 		err = fmt.Errorf("Consumer Open error:\n%s\n%w", c.service.Path, err)
 		return

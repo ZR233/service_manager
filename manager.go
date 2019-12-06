@@ -6,8 +6,11 @@ package service_manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	pool "github.com/ZR233/goutils/conn_pool"
 	"github.com/samuel/go-zookeeper/zk"
+	"io"
 	"os"
 	"path"
 	"time"
@@ -59,17 +62,46 @@ func (o ConsumerOptionConnFactory) set(s *Consumer) {
 type ConsumerOption interface {
 	set(c *Consumer)
 }
+type ConsumerOptionConnMax int
+
+func (o ConsumerOptionConnMax) set(s *Consumer) {
+	s.connMax = int(o)
+}
+
+type ConsumerOptionConnMin int
+
+func (o ConsumerOptionConnMin) set(s *Consumer) {
+	s.connMin = int(o)
+}
+
+type ConsumerOptionConnTestFunc pool.ConnTestFunc
+
+func (o ConsumerOptionConnTestFunc) set(s *Consumer) {
+	s.connTestFunc = pool.ConnTestFunc(o)
+}
 
 func (m *Manager) NewConsumer(service *Service, options ...ConsumerOption) *Consumer {
 	c := &Consumer{}
+	c.connTestFunc = func(closer io.Closer) bool {
+		return true
+	}
+	c.connMax = 1
+	c.connMin = 1
+
 	for _, v := range options {
 		v.set(c)
 	}
+	if c.connMax <= 0 || c.connMin > c.connMax {
+		panic(errors.New("config error"))
+	}
+
 	c.manager = m
 	m.consumers = append(m.consumers, c)
 	c.service = service
 	c.ctx, c.cancel = context.WithCancel(m.ctx)
 	c.funcChan = make(chan func() error, 5)
+	c.connPools = make(map[string]*pool.Pool)
+	c.connHostMap = map[io.Closer]string{}
 	return c
 }
 
