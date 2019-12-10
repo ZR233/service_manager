@@ -12,9 +12,12 @@ import (
 func TestConsumer_Open(t *testing.T) {
 
 	m := NewManager([]string{"192.168.0.3:2181"})
-	c := m.NewConsumer(m.NewService("cam_detect"))
-
-	err := m.RunSync()
+	c, err := m.NewConsumer(m.NewService("test"))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = m.RunSync()
 	if err != nil {
 		t.Error(err)
 		return

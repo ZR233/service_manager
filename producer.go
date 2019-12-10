@@ -1,7 +1,6 @@
 package service_manager
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,19 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
-)
-
-type Status int
-
-const (
-	StatusInit Status = iota
-	StatusOpen
-	StatusOpenSuccess
-	StatusRegistered
-	StatusStopping
-	StatusStopped
 )
 
 type NodeInfo struct {
@@ -38,14 +25,8 @@ type NodeInfo struct {
 
 type Producer struct {
 	//private:
-	sync.Mutex
+	producerConsumerBase
 	pathReal string
-	manager  *Manager
-	funcChan chan func() error
-	service  *Service
-	status   Status
-	ctx      context.Context
-	cancel   context.CancelFunc
 
 	//public:
 	NodeInfo
@@ -64,33 +45,50 @@ func (p *Producer) panic(args ...interface{}) {
 	p.manager.print("Panic", "[producer]"+p.service.Path, args...)
 }
 
-func (p *Producer) getEventCallback() zk.EventCallback {
-	return func(event zk.Event) {
-		if event.Type == zk.EventSession && event.State == zk.StateHasSession {
-			p.info("register service")
-			defer func() {
-				recover()
-			}()
+//func (p *Producer) getEventCallback() zk.EventCallback {
+//	return func(event zk.Event) {
+//		if event.Type == zk.EventSession && event.State == zk.StateHasSession {
+//			p.info("register service")
+//			defer func() {
+//				recover()
+//			}()
+//
+//			p.funcChan <- func() error {
+//				err := p.register()
+//				if err != nil {
+//					err := fmt.Errorf("register service\n%w", err)
+//					return err
+//				}
+//				return nil
+//			}
+//		}
+//	}
+//}
 
-			p.funcChan <- func() error {
-				err := p.register()
-				if err != nil {
-					err := fmt.Errorf("register service\n%w", err)
-					return err
-				}
-				return nil
-			}
+func (p *Producer) getEventCallback() zk.EventCallback {
+	return p.onZkConnect("Producer", func() error {
+		err := p.ensureServicePathExist()
+		if err != nil {
+			p.ready("Producer", err)
+			err = fmt.Errorf("service path error:\n%s\n%w", p.service.Path, err)
+			return err
 		}
-	}
+
+		err = p.register()
+		p.ready("Producer", err)
+		if err != nil {
+			err := fmt.Errorf("register service\n%w", err)
+			return err
+		}
+
+		return nil
+	})
 }
 
 func (p *Producer) register() (err error) {
-	p.Lock()
-	defer p.Unlock()
 	if p.status >= StatusStopping {
 		return
 	}
-	p.status = StatusOpenSuccess
 
 	p.Pid = os.Getpid()
 
@@ -166,8 +164,6 @@ func (p *Producer) register() (err error) {
 		return
 	}
 
-	p.status = StatusRegistered
-
 	p.debug("register success: ", pathName)
 	return
 }
@@ -220,53 +216,42 @@ func (p *Producer) Open() (err error) {
 		<-p.ctx.Done()
 		p.release()
 	}()
-
+	p.status = StatusOpenSuccess
 	p.ExecPath, _ = GetCurrentPath()
 
-	p.status = StatusOpen
-
-	p.Lock()
-	defer p.Unlock()
-	err = p.ensureServicePathExist()
-	if err != nil {
-		err = fmt.Errorf("service path error:\n%s\n%w", p.service.Path, err)
-		return
-	}
-
-	p.status = StatusOpenSuccess
 	p.debug("service path check ok")
 
-	go p.dealFuncLoop()
+	go p.funcDealerLoop("Producer")
 	return
 }
 
-func (p *Producer) dealFuncLoop() {
-	defer func() {
-		p.status = StatusStopped
-		p.debug("service stop")
-	}()
-	for {
-		if p.status >= StatusStopping {
-			return
-		}
-
-		select {
-		case <-p.ctx.Done():
-			return
-		case f := <-p.funcChan:
-			if f == nil {
-				continue
-			}
-
-			err := f()
-			e := &NodeRunningError{}
-			if errors.As(err, &e) {
-				panic(err)
-			}
-
-		}
-	}
-}
+//func (p *Producer) dealFuncLoop() {
+//	defer func() {
+//		p.status = StatusStopped
+//		p.debug("service stop")
+//	}()
+//	for {
+//		if p.status >= StatusStopping {
+//			return
+//		}
+//
+//		select {
+//		case <-p.ctx.Done():
+//			return
+//		case f := <-p.funcChan:
+//			if f == nil {
+//				continue
+//			}
+//
+//			err := f()
+//			e := &NodeRunningError{}
+//			if errors.As(err, &e) {
+//				panic(err)
+//			}
+//
+//		}
+//	}
+//}
 
 func (p *Producer) ensureServicePathExist() (err error) {
 	pathStr := strings.TrimLeft(p.service.Path, "/")

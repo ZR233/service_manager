@@ -13,6 +13,7 @@ type Logger interface {
 	Debug(args ...interface{})
 	Info(args ...interface{})
 	Warn(args ...interface{})
+	Error(args ...interface{})
 	Panic(args ...interface{})
 }
 
@@ -30,9 +31,11 @@ func (d defaultLogger) Info(args ...interface{}) {
 func (d defaultLogger) Warn(args ...interface{}) {
 	log.Println(args...)
 }
-
+func (d defaultLogger) Error(args ...interface{}) {
+	log.Println(args...)
+}
 func (d defaultLogger) Panic(args ...interface{}) {
-	log.Panic(args...)
+	log.Println(args...)
 }
 
 type zkLogger struct {

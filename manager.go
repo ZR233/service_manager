@@ -6,7 +6,6 @@ package service_manager
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	pool "github.com/ZR233/goutils/conn_pool"
 	"github.com/samuel/go-zookeeper/zk"
@@ -80,8 +79,8 @@ func (o ConsumerOptionConnTestFunc) set(s *Consumer) {
 	s.connTestFunc = pool.ConnTestFunc(o)
 }
 
-func (m *Manager) NewConsumer(service *Service, options ...ConsumerOption) *Consumer {
-	c := &Consumer{}
+func (m *Manager) NewConsumer(service *Service, options ...ConsumerOption) (c *Consumer, err error) {
+	c = &Consumer{}
 	c.connTestFunc = func(closer io.Closer) bool {
 		return true
 	}
@@ -91,18 +90,18 @@ func (m *Manager) NewConsumer(service *Service, options ...ConsumerOption) *Cons
 	for _, v := range options {
 		v.set(c)
 	}
-	if c.connMax <= 0 || c.connMin > c.connMax {
-		panic(errors.New("config error"))
-	}
 
-	c.manager = m
 	m.consumers = append(m.consumers, c)
-	c.service = service
-	c.ctx, c.cancel = context.WithCancel(m.ctx)
-	c.funcChan = make(chan func() error, 5)
-	c.connPools = make(map[string]*pool.Pool)
-	c.connHostMap = map[io.Closer]string{}
-	return c
+
+	c.connPool, err = pool.NewPool(
+		c.poolConnFactory(),
+		c.poolErrorHandler,
+		c.connTestFunc,
+		pool.OptionMaxOpen(c.connMax),
+		pool.OptionMinOpen(c.connMin),
+	)
+	c.init(m.ctx, m, service)
+	return
 }
 
 type ProducerOption interface {
@@ -119,8 +118,7 @@ func (o OptionHost) set(s *Producer) {
 func (m *Manager) NewProducer(service *Service, port int, options ...ProducerOption) (producer *Producer, err error) {
 	producer = &Producer{}
 	producer.Port = port
-	producer.service = service
-	producer.manager = m
+
 	for _, v := range options {
 		v.set(producer)
 	}
@@ -139,9 +137,7 @@ func (m *Manager) NewProducer(service *Service, port int, options ...ProducerOpt
 		producer.Host = producer.HostName
 	}
 
-	producer.funcChan = make(chan func() error, 5)
-	producer.ctx, producer.cancel = context.WithCancel(m.ctx)
-
+	producer.init(m.ctx, m, service)
 	return
 }
 
@@ -192,6 +188,21 @@ func (m *Manager) RunSync() (err error) {
 			return
 		}
 	}
+
+	//等待初始化完成
+	for _, v := range m.producers {
+		err = v.waitForReady()
+		if err != nil {
+			return
+		}
+	}
+	for _, v := range m.consumers {
+		err = v.waitForReady()
+		if err != nil {
+			return
+		}
+	}
+
 	return
 }
 
