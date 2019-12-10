@@ -69,7 +69,7 @@ func (c *Consumer) watchService() (err error) {
 		if err != nil {
 			return
 		}
-		go c.connUpdateLoop()
+
 	}
 	stopChan := c.zkCtx.Done()
 	select {
@@ -85,7 +85,6 @@ func (c *Consumer) watchService() (err error) {
 			return
 		}
 
-		go c.connUpdateLoop()
 	}
 	return
 }
@@ -118,6 +117,19 @@ func (c *Consumer) updateService(data []byte, force bool) (err error) {
 			c.connTestFunc = GRpcConnTest()
 		}
 	}
+	c.connPool.Close()
+	c.connPool, err = pool.NewPool(
+		c.poolConnFactory(),
+		c.poolErrorHandler,
+		c.connTestFunc,
+		pool.OptionMaxOpen(c.connMax),
+		pool.OptionMinOpen(c.connMin),
+	)
+	if err != nil {
+		err = fmt.Errorf("NewPool error\n%w", err)
+		return
+	}
+	go c.connUpdateLoop()
 	return
 }
 
