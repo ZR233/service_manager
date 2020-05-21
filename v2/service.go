@@ -41,8 +41,8 @@ func (c *CheckWithNoServer) Exec(reg *api.AgentServiceRegistration) {
 type RunType int
 
 const (
-	RunTypeNormal RunType = iota
-	RunTypeSingle
+	RunModelNormal RunType = iota
+	RunModelSingle
 )
 
 type Options struct {
@@ -73,15 +73,33 @@ func (s *Service) Close() error {
 	s.consulClient.Agent().ServiceDeregister(s.Id)
 	return nil
 }
-
+func (s *Service) checkSingle() {
+	list, _, err := s.consulClient.Health().Service(s.options.Name, "", true, nil)
+	if err != nil {
+		panic(err)
+	}
+	if len(list) > 0 {
+		msg := "single service already running on: "
+		for _, v := range list {
+			msg += fmt.Sprintf("\n%s", v.Node.Node)
+		}
+		msg += "\n"
+		err = fmt.Errorf("%s", msg)
+		panic(err)
+	}
+}
 func (s *Service) start() {
 	client, err := api.NewClient(s.options.ConsulConfig)
 	if err != nil {
 		panic(err)
 	}
 	s.consulClient = client
-
 	agent := client.Agent()
+
+	if s.options.RunType == RunModelSingle {
+		s.checkSingle()
+	}
+
 	hostname, _ := os.Hostname()
 	s.Id = fmt.Sprintf("%v-%v", s.options.Name, hostname)
 
