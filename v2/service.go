@@ -5,6 +5,7 @@ import (
 	"github.com/hashicorp/consul/api"
 	"net/http"
 	"os"
+	"time"
 )
 
 type Check interface {
@@ -38,6 +39,7 @@ func (c *CheckTcp) Exec(reg *api.AgentServiceRegistration) {
 		Interval:                       "5s", // 健康检查间隔
 		TCP:                            fmt.Sprintf("%s:%d", "127.0.0.1", c.options.Port),
 		DeregisterCriticalServiceAfter: "10s", // 注销时间，相当于过期时间
+		Timeout:                        "1s",
 	}
 }
 
