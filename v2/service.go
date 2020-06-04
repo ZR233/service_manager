@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/consul/api"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -20,6 +21,22 @@ type CheckWithNoServer struct {
 type CheckGrpc struct {
 	options *Options
 }
+type CheckGin struct {
+	options *Options
+	router  gin.IRouter
+}
+
+func (c *CheckGin) Exec(reg *api.AgentServiceRegistration) {
+	reg.Check = &api.AgentServiceCheck{ // 健康检查
+		Interval:                       "5s", // 健康检查间隔
+		HTTP:                           fmt.Sprintf("http://%s:%d/%s", "127.0.0.1", c.options.Port, "v1.Health/Check"),
+		DeregisterCriticalServiceAfter: "10s", // 注销时间，相当于过期时间
+	}
+
+	c.router.GET("/v1.Health/Check", func(ctx *gin.Context) {
+		ctx.String(http.StatusOK, "success")
+	})
+}
 
 func (c *CheckGrpc) Exec(reg *api.AgentServiceRegistration) {
 	reg.Check = &api.AgentServiceCheck{ // 健康检查
@@ -36,6 +53,10 @@ func (o *Options) CheckGrpc(grpcServer *grpc.Server) {
 }
 func (o *Options) CheckWithNoServer() {
 	c := &CheckWithNoServer{options: o}
+	o.Check = c
+}
+func (o *Options) CheckGin(router gin.IRouter) {
+	c := &CheckGin{options: o, router: router}
 	o.Check = c
 }
 
