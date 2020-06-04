@@ -2,61 +2,52 @@ package service
 
 import (
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/consul/api"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"net/http"
 	"os"
 )
 
 type Check interface {
+	Set(o *Options)
 	Exec(reg *api.AgentServiceRegistration)
 }
-type CheckHttp struct {
-}
+
 type CheckWithNoServer struct {
 	options *Options
 }
-type CheckGrpc struct {
-	options *Options
-}
-type CheckGin struct {
-	options *Options
-	router  gin.IRouter
+
+func (c *CheckWithNoServer) Set(o *Options) {
+	c.options = o
 }
 
-func (c *CheckGin) Exec(reg *api.AgentServiceRegistration) {
+func (o *Options) SetCheck(check Check) {
+	check.Set(o)
+	o.Check = check
+}
+
+type CheckTcp struct {
+	options *Options
+}
+
+func (c *CheckTcp) Set(o *Options) {
+	c.options = o
+}
+
+func (c *CheckTcp) Exec(reg *api.AgentServiceRegistration) {
 	reg.Check = &api.AgentServiceCheck{ // 健康检查
 		Interval:                       "5s", // 健康检查间隔
-		HTTP:                           fmt.Sprintf("http://%s:%d/%s", "127.0.0.1", c.options.Port, "v1.Health/Check"),
-		DeregisterCriticalServiceAfter: "10s", // 注销时间，相当于过期时间
-	}
-
-	c.router.GET("/v1.Health/Check", func(ctx *gin.Context) {
-		ctx.String(http.StatusOK, "success")
-	})
-}
-
-func (c *CheckGrpc) Exec(reg *api.AgentServiceRegistration) {
-	reg.Check = &api.AgentServiceCheck{ // 健康检查
-		Interval: "5s", // 健康检查间隔
-		// grpc 支持，执行健康检查的地址，service 会传到 Health.Check 函数中
-		GRPC:                           fmt.Sprintf("%v:%v/%v", "127.0.0.1", c.options.Port, "grpc.health.v1.Health/Check"),
+		TCP:                            fmt.Sprintf("%s:%d", "127.0.0.1", c.options.Port),
 		DeregisterCriticalServiceAfter: "10s", // 注销时间，相当于过期时间
 	}
 }
-func (o *Options) CheckGrpc(grpcServer *grpc.Server) {
-	c := &CheckGrpc{options: o}
+
+func (o *Options) CheckTcp() {
+	c := &CheckTcp{options: o}
 	o.Check = c
-	grpc_health_v1.RegisterHealthServer(grpcServer, &HealthImpl{})
 }
+
 func (o *Options) CheckWithNoServer() {
 	c := &CheckWithNoServer{options: o}
-	o.Check = c
-}
-func (o *Options) CheckGin(router gin.IRouter) {
-	c := &CheckGin{options: o, router: router}
 	o.Check = c
 }
 
@@ -168,10 +159,10 @@ func NewService(options *Options) (s *Service, err error) {
 	if options.Port <= 0 {
 		panic(fmt.Errorf("service port error: %d", options.Port))
 	}
-
 	s = &Service{
 		options: options,
 	}
+
 	s.start()
 	return
 }

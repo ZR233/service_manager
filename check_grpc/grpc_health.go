@@ -1,4 +1,4 @@
-package service
+package check_grpc
 
 import (
 	"context"
