@@ -5,7 +5,6 @@ import (
 	"github.com/hashicorp/consul/api"
 	"net/http"
 	"os"
-	"time"
 )
 
 type Check interface {
