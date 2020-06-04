@@ -3,6 +3,7 @@ package check_gin
 import (
 	"fmt"
 	"github.com/ZR233/service_manager/v2"
+	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/consul/api"
 	"net/http"
 )
